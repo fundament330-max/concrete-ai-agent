@@ -3,44 +3,41 @@ import requests
 
 print("Скрипт запущен! Проверяем ключи...")
 
-# Загружаем секреты из GitHub Actions
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+API_KEY = os.getenv("DEEPSEEK_API_KEY")  # Сюда подставится ваш бесплатный ключ от Groq
 
-if not all([BOT_TOKEN, ADMIN_CHAT_ID, DEEPSEEK_API_KEY]):
+if not all([BOT_TOKEN, ADMIN_CHAT_ID, API_KEY]):
     print("Ошибка: Не найден один из ключей!")
     exit(1)
 
-print("Ключи на месте. Отправляем запрос к DeepSeek...")
+print("Ключи на месте. Отправляем запрос к бесплатной нейросети Groq...")
 
-# 1. Запрашиваем текст у нейросети
-deepseek_url = "https://api.deepseek.com/chat/completions"
+# Запрос к бесплатному API Groq (модель Llama-3.3-70b)
+url = "https://api.groq.com/openai/v1/chat/completions"
 headers = {
-    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+    "Authorization": f"Bearer {API_KEY}",
     "Content-Type": "application/json"
 }
 data = {
-    "model": "deepseek-chat",
+    "model": "llama-3.3-70b-versatile",
     "messages": [
-        {"role": "system", "content": "Ты эксперт по архитектурному бетону, терраццо и строительным технологиям. Пиши короткие, емкие посты для Telegram-канала."},
-        {"role": "user", "content": "Напиши короткий тестовый пост (2 абзаца) про современные добавки для высокопрочного бетона. Добавь пару хэштегов."}
+        {"role": "system", "content": "Ты эксперт по архитектурному бетону, терраццо и строительным технологиям. Пиши емкие, практичные посты для Telegram-канала на русском языке."},
+        {"role": "user", "content": "Напиши короткий пост (2 абзаца) про современные добавки для самоуплотняющегося и высокопрочного бетона. Добавь тематические хэштеги."}
     ]
 }
 
-response = requests.post(deepseek_url, headers=headers, json=data)
+response = requests.post(url, headers=headers, json=data)
 
 if response.status_code == 200:
     post_text = response.json()['choices'][0]['message']['content']
     print("Текст от нейросети успешно получен!")
     
-    # 2. Отправляем готовый текст в Telegram
     print("Отправляем черновик в Telegram...")
     tg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     tg_data = {
         "chat_id": ADMIN_CHAT_ID,
-        "text": post_text,
-        "parse_mode": "Markdown"
+        "text": post_text
     }
     tg_resp = requests.post(tg_url, json=tg_data)
     
@@ -49,4 +46,4 @@ if response.status_code == 200:
     else:
         print(f"Ошибка отправки в Telegram: {tg_resp.text}")
 else:
-    print(f"Ошибка от DeepSeek: {response.text}")
+    print(f"Ошибка нейросети: {response.text}")
