@@ -28,11 +28,11 @@ TOPIC_POOL = [
     "гидрофобизаторы и защитные пропитки для бетона"
 ]
 
-def query_groq(system_prompt: str, user_prompt: str, max_tokens: int = 700) -> str:
+def query_groq(system_prompt: str, user_prompt: str, max_tokens: int = 700, temperature: float = 0.3) -> str:
     payload = {
         "model": MODEL_NAME,
         "max_tokens": max_tokens,
-        "temperature": 0.3,
+        "temperature": temperature,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -66,59 +66,66 @@ def search_duckduckgo(query: str) -> list[str]:
             for r in results:
                 articles.append(f"Заголовок: {r.get('title', '')}\nТекст: {r.get('body', '')}")
     except Exception as e:
-        print(f"Ошибка DuckDuckGo: {e}")
+        print(f"DuckDuckGo ошибка: {e}")
     return articles
 
 def main():
     base_topic = random.choice(TOPIC_POOL)
-    print(f"[Агент] Выбрана тема: {base_topic}")
+    print(f"[Harness] Инициализация агента. Тема: {base_topic}")
 
-    # ЭТАП 1: Агент-планировщик генерирует поисковый запрос
-    print("[Агент] Шаг 1: Формирование поискового запроса...")
+    # ЭТАП 1: Планировщик формирует поисковый запрос
+    print("[Harness] Шаг 1/4: Планирование поискового запроса...")
     search_query = query_groq(
         system_prompt="Ты поисковый агент. Сформируй один точный поисковый запрос (2-4 слова) на русском языке. Верни ТОЛЬКО запрос без кавычек.",
         user_prompt=base_topic,
         max_tokens=40
     )
-    print(f"[Агент] Запрос: {search_query}")
+    print(f"[Harness] Запрос: {search_query}")
 
-    # ЭТАП 2: Сбор сырых данных
-    print("[Агент] Шаг 2: Сбор контекста из сети...")
+    # ЭТАП 2: Сбор сырых данных из независимых источников
+    print("[Harness] Шаг 2/4: Сбор контекста из сети...")
     raw_data = search_google_news(search_query) + search_duckduckgo(search_query)
     context_text = "\n\n".join(raw_data) if raw_data else "Используй внутреннюю инженерную базу знаний."
 
-    # ЭТАП 3: Агент-рапитер (Генерация черновика)
-    print("[Агент] Шаг 3: Синтез чернового поста...")
+    # ЭТАП 3: Генерация чернового поста
+    print("[Harness] Шаг 3/4: Генерация первичного контента...")
     draft_text = query_groq(
         system_prompt=(
-            "Ты ведущий инженер-технолог. Напиши черновик поста для Telegram-канала "
-            "по строительным технологиям. Структура: Жирный заголовок, 2 емких абзаца фактуры, 3 хэштега."
+            "Ты инженер-технолог. Напиши черновик технического поста для Telegram-канала. "
+            "Структура: Жирный заголовок, 2 емких абзаца фактуры с конкретикой, 3 хэштега."
         ),
         user_prompt=f"Тема: {base_topic}\n\nМатериалы:\n{context_text}",
-        max_tokens=600
+        max_tokens=600,
+        temperature=0.4
     )
 
-    # ЭТАП 4: Агент-критик (Валидация и редактура)
-    print("[Агент] Шаг 4: Проверка и полировка текста критиком...")
-    post_text = query_groq(
-        system_prompt=(
-            "Ты строгий технический редактор. Проверь текст на наличие рекламной воды, "
-            "общих фраз и фактических ошибок. Сделай язык максимально профессиональным, "
-            "сухим, инженерным. Убери всю 'лирику'. Верни итоговый вариант поста."
-        ),
-        user_prompt=f"Отредактируй этот черновик:\n\n{draft_text}",
-        max_tokens=600
+    # ЭТАП 4: Harness-контур (Критик и верификатор с циклом проверки)
+    print("[Harness] Шаг 4/4: Верификация и строгая техническая редактура...")
+    
+    verifier_system = (
+        "Ты бескомпромиссный главный редактор и технадзор строительного издания. "
+        "Твоя задача — проверить черновик на наличие воды, банальных фраз, выдуманных фактов и рекламы. "
+        "Требования к финалу: абсолютная инженерная точность, сухой профессиональный тон, "
+        "наличие параметров/терминов, четкая структура (жирный заголовок, 2 коротких абзаца, хэштеги). "
+        "Исправь все ошибки черновика и выдай готовый к публикации пост."
+    )
+    
+    final_post = query_groq(
+        system_prompt=verifier_system,
+        user_prompt=f"Проверь и доработай этот черновик до идеального инженерного состояния:\n\n{draft_text}",
+        max_tokens=700,
+        temperature=0.2
     )
 
-    if len(post_text) > 4000:
-        post_text = post_text[:4000]
+    if len(final_post) > 4000:
+        final_post = final_post[:4000]
 
-    # ЭТАП 5: Публикация
-    print("[Агент] Шаг 5: Отправка в Telegram...")
+    # Публикация в Telegram
+    print("[Harness] Отправка верифицированного поста в Telegram...")
     tg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     tg_payload = {
         "chat_id": ADMIN_CHAT_ID,
-        "text": post_text,
+        "text": final_post,
         "parse_mode": "Markdown"
     }
     tg_resp = requests.post(tg_url, json=tg_payload, timeout=20)
@@ -128,7 +135,7 @@ def main():
         tg_resp = requests.post(tg_url, json=tg_payload, timeout=20)
 
     if tg_resp.status_code == 200:
-        print("Пост успешно прошел агентский контур и доставлен!")
+        print("[Harness] Контур успешно завершен. Пост доставлен!")
     else:
         print(f"Ошибка отправки: {tg_resp.text}")
 
