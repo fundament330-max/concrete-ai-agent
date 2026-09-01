@@ -1,15 +1,22 @@
 import os
-import random
-import xml.etree.ElementTree as ET
+import logging
+import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 import requests
 from duckduckgo_search import DDGS
+import xml.etree.ElementTree as ET
 
-# --- CONFIGURATION & STATE ---
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-if not all([BOT_TOKEN, ADMIN_CHAT_ID, API_KEY]):
+if not all([BOT_TOKEN, API_KEY]):
     print("CRITICAL: Missing environment secrets.")
     exit(1)
 
@@ -17,24 +24,14 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 MODEL_NAME = "qwen/qwen3.8-27b"
 
-TOPIC_POOL = [
-    "технологии архитектурного бетона и фибробетона",
-    "составы смесей и шлифовка покрытий терраццо",
-    "автоматизация исполнительной документации и ведение АОСР",
-    "контроль качества бетонных смесей и паспорта качества",
-    "самоуплотняющийся бетон и современные поликарбоксилатные добавки",
-    "гидрофобизаторы и защитные пропитки для бетона"
-]
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
 
-class AgentState:
-    def __init__(self, topic: str):
-        self.topic = topic
-        self.search_query = ""
-        self.raw_context = ""
-        self.draft = ""
-        self.final_output = ""
+# Состояния для диалога
+class AgentStates(StatesGroup):
+    waiting_for_task = State()
 
-# --- LLM ENGINE (HARNESS CORE) ---
+# --- HARNESS CORE (LLM ENGINE) ---
 def call_harness_node(system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
     payload = {
         "model": MODEL_NAME,
@@ -46,24 +43,8 @@ def call_harness_node(system_prompt: str, user_prompt: str, temperature: float =
     }
     response = requests.post(API_URL, headers=HEADERS, json=payload, timeout=50)
     if response.status_code != 200:
-        raise RuntimeError(f"Harness Engine Error ({response.status_code}): {response.text}")
+        raise RuntimeError(f"Harness Engine Error: {response.text}")
     return response.json()['choices'][0]['message']['content'].strip()
-
-# --- TOOL NODES ---
-def tool_google_news(query: str) -> list[str]:
-    articles = []
-    try:
-        url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=ru&gl=RU&ceid=RU:ru"
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            root = ET.fromstring(resp.content)
-            for item in root.findall('./channel/item')[:2]:
-                title = item.find('title').text if item.find('title') is not None else ""
-                desc = item.find('description').text if item.find('description') is not None else ""
-                articles.append(f"Source [Google News]: {title} — {desc}")
-    except Exception:
-        pass
-    return articles
 
 def tool_duckduckgo(query: str) -> list[str]:
     articles = []
@@ -76,65 +57,70 @@ def tool_duckduckgo(query: str) -> list[str]:
         pass
     return articles
 
-# --- HARNESS AGENT WORKFLOW ---
-def run_harness():
-    state = AgentState(topic=random.choice(TOPIC_POOL))
-    print(f"[Harness 0/4] Initialized state. Target topic: {state.topic}")
-
-    # Node 1: Planner / Query Generator
-    print("[Harness 1/4] Executing Planner Node...")
-    state.search_query = call_harness_node(
-        system_prompt="Ты модуль планирования поисковых запросов в агенте Harness. Сформируй один точный поисковый запрос (2-4 слова) на русском языке. Верни ТОЛЬКО текст запроса без кавычек.",
-        user_prompt=state.topic,
+# --- HARNESS PIPELINE ---
+def run_interactive_harness(user_task: str) -> str:
+    # Node 1: Planner
+    search_query = call_harness_node(
+        system_prompt="Сформируй один точный поисковый запрос (2-4 слова) на русском языке для этой задачи. Верни ТОЛЬКО запрос без кавычек.",
+        user_prompt=user_task,
         temperature=0.2
     )
-    print(f" -> Query generated: {state.search_query}")
+    
+    # Node 2: Retrieval
+    raw_data = tool_duckduckgo(search_query)
+    context_text = "\n".join(raw_data) if raw_data else "Внешние источники недоступны."
 
-    # Node 2: Tool Execution (Retrieval)
-    print("[Harness 2/4] Executing Tool Execution Node (Search)...")
-    context_data = tool_google_news(state.search_query) + tool_duckduckgo(state.search_query)
-    state.raw_context = "\n".join(context_data) if context_data else "Внешние источники недоступны. Используй внутреннюю фактуру."
-
-    # Node 3: Synthesis / Generator
-    print("[Harness 3/4] Executing Synthesis Node...")
-    state.draft = call_harness_node(
-        system_prompt="Ты инженер-технолог. Напиши черновик технического поста для Telegram-канала. Структура: Жирный заголовок, 2 емких абзаца фактуры с конкретикой, 3 хэштега.",
-        user_prompt=f"Тема: {state.topic}\n\nСобранный контекст:\n{state.raw_context}",
+    # Node 3: Synthesis
+    draft = call_harness_node(
+        system_prompt="Ты инженер-технолог. Напиши качественный технический ответ/пост на основе задачи и контекста.",
+        user_prompt=f"Задача: {user_task}\n\nКонтекст:\n{context_text}",
         temperature=0.4
     )
 
-    # Node 4: Critic / Verifier Loop
-    print("[Harness 4/4] Executing Critic & Verification Node...")
-    critic_prompt = (
-        "Ты строгий технический редактор и главный технадзор (Harness Verifier). "
-        "Проверь черновик на наличие воды, выдуманных фактов и рекламы. "
-        "Добейся абсолютной инженерной точности, сухого профессионального тона, "
-        "наличия параметров и четкой структуры (жирный заголовок, 2 абзаца, хэштеги). "
-        "Выдай окончательный текст."
-    )
-    state.final_output = call_harness_node(
-        system_prompt=critic_prompt,
-        user_prompt=f"Проверь и верифицируй этот черновик:\n\n{state.draft}",
+    # Node 4: Critic / Verifier
+    final_output = call_harness_node(
+        system_prompt="Ты строгий технический редактор. Проверь текст на ошибки, убери воду, сделай формулировки абсолютно профессиональными и точными.",
+        user_prompt=f"Отредактируй и верифицируй этот ответ:\n\n{draft}",
         temperature=0.1
     )
 
-    if len(state.final_output) > 4000:
-        state.final_output = state.final_output[:4000]
+    return final_output
 
-    # Dispatcher / Action Node (Telegram Delivery)
-    print("[Harness Dispatch] Sending payload to Telegram...")
-    tg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": ADMIN_CHAT_ID, "text": state.final_output, "parse_mode": "Markdown"}
-    resp = requests.post(tg_url, json=payload, timeout=20)
-    
-    if resp.status_code != 200:
-        payload.pop("parse_mode", None)
-        resp = requests.post(tg_url, json=payload, timeout=20)
+# --- TELEGRAM HANDLERS ---
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "Привет! Я интерактивный инженерный агент с Harness-контуром.\n\n"
+        "Напиши мне любую тему или задачу (например: *«Сделай пост про поликарбоксилатные добавки»* или *«Какие нюансы при шлифовке терраццо?»*), "
+        "и я пропущу её через агентов поиска и критики."
+    )
 
-    if resp.status_code == 200:
-        print("[Harness Pipeline] Successfully completed and dispatched.")
-    else:
-        print(f"Dispatcher Error: {resp.text}")
+@dp.message()
+async def handle_user_message(message: types.Message):
+    user_task = message.text
+    processing_msg = await message.answer("🔄 Агент запущен в работу: планирование, поиск, генерация, верификация...")
+
+    try:
+        # Запускаем синхронный контур Harness в отдельном потоке, чтобы не вешать бота
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, run_interactive_harness, user_task)
+        
+        await bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=processing_msg.message_id,
+            text=result,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=processing_msg.message_id,
+            text=f"❌ Ошибка выполнения агента: {e}"
+        )
+
+async def main():
+    print("Интерактивный бот запущен и слушает сообщения...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    run_harness()
+    asyncio.run(main())
