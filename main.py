@@ -74,21 +74,17 @@ def main():
     print(f"[Harness] Инициализация агента. Тема: {base_topic}")
 
     # ЭТАП 1: Планировщик формирует поисковый запрос
-    print("[Harness] Шаг 1/4: Планирование поискового запроса...")
     search_query = query_groq(
         system_prompt="Ты поисковый агент. Сформируй один точный поисковый запрос (2-4 слова) на русском языке. Верни ТОЛЬКО запрос без кавычек.",
         user_prompt=base_topic,
         max_tokens=40
     )
-    print(f"[Harness] Запрос: {search_query}")
 
-    # ЭТАП 2: Сбор сырых данных из независимых источников
-    print("[Harness] Шаг 2/4: Сбор контекста из сети...")
+    # ЭТАП 2: Сбор сырых данных
     raw_data = search_google_news(search_query) + search_duckduckgo(search_query)
     context_text = "\n\n".join(raw_data) if raw_data else "Используй внутреннюю инженерную базу знаний."
 
     # ЭТАП 3: Генерация чернового поста
-    print("[Harness] Шаг 3/4: Генерация первичного контента...")
     draft_text = query_groq(
         system_prompt=(
             "Ты инженер-технолог. Напиши черновик технического поста для Telegram-канала. "
@@ -99,9 +95,7 @@ def main():
         temperature=0.4
     )
 
-    # ЭТАП 4: Harness-контур (Критик и верификатор с циклом проверки)
-    print("[Harness] Шаг 4/4: Верификация и строгая техническая редактура...")
-    
+    # ЭТАП 4: Harness-контур (Критик и верификатор)
     verifier_system = (
         "Ты бескомпромиссный главный редактор и технадзор строительного издания. "
         "Твоя задача — проверить черновик на наличие воды, банальных фраз, выдуманных фактов и рекламы. "
@@ -121,7 +115,6 @@ def main():
         final_post = final_post[:4000]
 
     # Публикация в Telegram
-    print("[Harness] Отправка верифицированного поста в Telegram...")
     tg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     tg_payload = {
         "chat_id": ADMIN_CHAT_ID,
