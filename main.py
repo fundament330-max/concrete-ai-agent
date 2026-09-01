@@ -55,6 +55,11 @@ if response.status_code == 200:
     post_text = response.json()['choices'][0]['message']['content']
     print("Текст от нейросети успешно получен!")
     
+    # Защита от превышения лимита Telegram (4096 символов)
+    if len(post_text) > 4000:
+        print("Текст слишком длинный, обрезаем...")
+        post_text = post_text[:4000] + "\n\n[...Текст обрезан из-за лимита Telegram...]"
+    
     print("Отправляем черновик в Telegram...")
     tg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     tg_data = {
