@@ -5,22 +5,44 @@ print("Скрипт запущен! Проверяем ключи...")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-API_KEY = os.getenv("DEEPSEEK_API_KEY")  # Сюда подставится ваш бесплатный ключ от Groq
+API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 if not all([BOT_TOKEN, ADMIN_CHAT_ID, API_KEY]):
     print("Ошибка: Не найден один из ключей!")
     exit(1)
 
-print("Ключи на месте. Отправляем запрос к бесплатной нейросети Groq...")
-
-# Запрос к бесплатному API Groq (модель Llama-3.3-70b)
-url = "https://api.groq.com/openai/v1/chat/completions"
 headers = {
     "Authorization": f"Bearer {API_KEY}",
     "Content-Type": "application/json"
 }
+
+# 1. Автоматически получаем список моделей, доступных на вашем ключе
+print("Запрашиваем доступные модели Groq...")
+models_resp = requests.get("https://api.groq.com/openai/v1/models", headers=headers)
+
+if models_resp.status_code != 200:
+    print(f"Ошибка получения моделей: {models_resp.text}")
+    exit(1)
+
+available_models = [m["id"] for m in models_resp.json().get("data", [])]
+print(f"Доступные модели на аккаунте: {available_models}")
+
+# Выбираем подходящую текстовую модель
+chosen_model = None
+for m in available_models:
+    if "whisper" not in m and "guard" not in m and "vision" not in m:
+        chosen_model = m
+        break
+
+if not chosen_model and available_models:
+    chosen_model = available_models[0]
+
+print(f"Используем модель: {chosen_model}")
+
+# 2. Генерируем пост
+url = "https://api.groq.com/openai/v1/chat/completions"
 data = {
-    "model": "llama-3.1-8b-instant",
+    "model": chosen_model,
     "messages": [
         {"role": "system", "content": "Ты эксперт по архитектурному бетону, терраццо и строительным технологиям. Пиши емкие, практичные посты для Telegram-канала на русском языке."},
         {"role": "user", "content": "Напиши короткий пост (2 абзаца) про современные добавки для самоуплотняющегося и высокопрочного бетона. Добавь тематические хэштеги."}
